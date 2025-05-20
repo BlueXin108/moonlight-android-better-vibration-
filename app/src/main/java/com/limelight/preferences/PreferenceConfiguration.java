@@ -9,6 +9,8 @@ import android.view.Display;
 
 import com.limelight.nvstream.jni.MoonBridge;
 
+
+
 public class PreferenceConfiguration {
     public enum FormatOption {
         AUTO,
@@ -23,6 +25,16 @@ public class PreferenceConfiguration {
         LEFT
     }
 
+
+    // 震动模式选择 (0=默认, 1=高频点按, 2=增强型震动)
+    public int vibrationMode = 1; // 默认使用高频点按模式
+    
+    // 震动强度增益因子 - 用于增强"力量感"
+    public float vibrationIntensityGain = 1.3f;
+    
+    // 是否使用系统预设效果（部分设备上效果更好）
+    public boolean useSystemPresetEffects = true;
+    
     private static final String LEGACY_RES_FPS_PREF_STRING = "list_resolution_fps";
     private static final String LEGACY_ENABLE_51_SURROUND_PREF_STRING = "checkbox_51_surround";
 
