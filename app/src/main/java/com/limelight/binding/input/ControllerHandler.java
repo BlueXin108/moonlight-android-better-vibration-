@@ -2056,146 +2056,88 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         vm.vibrate(combo.combine(), vibrationAttributes.build());
     }
 
-    private void rumbleSingleVibrator(Vibrator vibrator, short lowFreqMotor, short highFreqMotor) {
-        // Since we can only use a single amplitude value, compute the desired amplitude
-        // by taking 80% of the big motor and 33% of the small motor, then capping to 255.
-        // NB: This value is now 0-255 as required by VibrationEffect.
-        short lowFreqMotorMSB = (short)((lowFreqMotor >> 8) & 0xFF);
-        short highFreqMotorMSB = (short)((highFreqMotor >> 8) & 0xFF);
-        int simulatedAmplitude = Math.min(255, (int)((lowFreqMotorMSB * 0.80) + (highFreqMotorMSB * 0.33)));
+   private void rumbleSingleVibrator(Vibrator vibrator, short lowFreqMotor, short highFreqMotor) {
+    // 计算振动强度
+    short lowFreqMotorMSB = (short)((lowFreqMotor >> 8) & 0xFF);
+    short highFreqMotorMSB = (short)((highFreqMotor >> 8) & 0xFF);
+    int simulatedAmplitude = Math.min(255, (int)((lowFreqMotorMSB * 0.80) + (highFreqMotorMSB * 0.33)));
 
-        if (simulatedAmplitude == 0) {
-            // This case is easy - just cancel the current effect and get out.
-            // NB: We cannot simply check lowFreqMotor == highFreqMotor == 0
-            // because our simulatedAmplitude could be 0 even though our inputs
-            // are not (ex: lowFreqMotor == 0 && highFreqMotor == 1).
-            vibrator.cancel();
-            if(vibrator==deviceVibrator&&prefConfig.enableForceStrongVibrationsStop){
-                vibrator.vibrate(1);
+    // 使用最大值作为震动强度判断依据
+    int maxMotorValue = Math.max(lowFreqMotorMSB, highFreqMotorMSB);
+
+    // 如果振幅为0，取消振动
+    if (simulatedAmplitude == 0) {
+        vibrator.cancel();
+        if(vibrator == deviceVibrator && prefConfig.enableForceStrongVibrationsStop){
+            vibrator.vibrate(1);
+        }
+        return;
+    }
+
+    // 仅针对设备震动器(手机震动)进行特殊处理
+    if(vibrator == deviceVibrator) {
+        // 检查是否支持振幅控制（大多数线性马达支持）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && vibrator.hasAmplitudeControl()) {
+            // 选择震动模式：1=高频点按 2=增强型震动 0=默认
+            int vibrationMode = prefConfig.vibrationMode != 0 ? prefConfig.vibrationMode : 1; // 默认为高频点按
+            
+            switch(vibrationMode) {
+                case 1: // 高频点按模式
+                    createTapticFeedback(vibrator, simulatedAmplitude, maxMotorValue);
+                    break;
+                case 2: // 增强型震动模式
+                    createEnhancedVibration(vibrator, simulatedAmplitude, maxMotorValue);
+                    break;
+                default: // 默认模式 - 使用原始的长震动但添加波形
+                    createDefaultEnhancedVibration(vibrator, simulatedAmplitude);
+                    break;
             }
             return;
-        }
-        //设备震动马达，并且开启强烈震动
-        if(vibrator==deviceVibrator&&prefConfig.enableForceStrongVibrations){
-            vibrator.vibrate(60000);
+        } 
+        else if(prefConfig.enableForceStrongVibrations) {
+            // 对于不支持振幅控制的设备，但用户启用了强制振动，使用简单的震动
+            vibrator.vibrate(100);
             return;
-        }
-
-        // Attempt to use amplitude-based control if we're on Oreo and the device
-        // supports amplitude-based vibration control.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (vibrator.hasAmplitudeControl()) {
-                VibrationEffect effect = VibrationEffect.createOneShot(60000, simulatedAmplitude);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    VibrationAttributes vibrationAttributes = new VibrationAttributes.Builder()
-                            .setUsage(VibrationAttributes.USAGE_MEDIA)
-                            .build();
-                    vibrator.vibrate(effect, vibrationAttributes);
-                }
-                else {
-                    AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_GAME)
-                            .build();
-                    vibrator.vibrate(effect, audioAttributes);
-                }
-                return;
-            }
-        }
-
-        // If we reach this point, we don't have amplitude controls available, so
-        // we must emulate it by PWMing the vibration. Ick.
-        long pwmPeriod = 20;
-        long onTime = (long)((simulatedAmplitude / 255.0) * pwmPeriod);
-        long offTime = pwmPeriod - onTime;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            VibrationAttributes vibrationAttributes = new VibrationAttributes.Builder()
-                    .setUsage(VibrationAttributes.USAGE_MEDIA)
-                    .build();
-            vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, onTime, offTime}, 0), vibrationAttributes);
-        }
-        else {
-            AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_GAME)
-                    .build();
-            vibrator.vibrate(new long[]{0, onTime, offTime}, 0, audioAttributes);
         }
     }
 
-    public void handleRumble(short controllerNumber, short lowFreqMotor, short highFreqMotor) {
-        boolean foundMatchingDevice = false;
-        boolean vibrated = false;
-
-        if (stopped) {
+    // 下面是原始代码逻辑，当上述条件都不满足时执行
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (vibrator.hasAmplitudeControl()) {
+            VibrationEffect effect = VibrationEffect.createOneShot(60000, simulatedAmplitude);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                VibrationAttributes vibrationAttributes = new VibrationAttributes.Builder()
+                        .setUsage(VibrationAttributes.USAGE_MEDIA)
+                        .build();
+                vibrator.vibrate(effect, vibrationAttributes);
+            }
+            else {
+                AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .build();
+                vibrator.vibrate(effect, audioAttributes);
+            }
             return;
         }
-
-        for (int i = 0; i < inputDeviceContexts.size(); i++) {
-            InputDeviceContext deviceContext = inputDeviceContexts.valueAt(i);
-
-            if (deviceContext.controllerNumber == controllerNumber) {
-                foundMatchingDevice = true;
-
-                deviceContext.lowFreqMotor = lowFreqMotor;
-                deviceContext.highFreqMotor = highFreqMotor;
-
-                // Prefer the documented Android 12 rumble API which can handle dual vibrators on PS/Xbox controllers
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && deviceContext.vibratorManager != null) {
-                    vibrated = true;
-                    if (deviceContext.quadVibrators) {
-                        rumbleQuadVibrators(deviceContext.vibratorManager,
-                                deviceContext.lowFreqMotor, deviceContext.highFreqMotor,
-                                deviceContext.leftTriggerMotor, deviceContext.rightTriggerMotor);
-                    }
-                    else {
-                        rumbleDualVibrators(deviceContext.vibratorManager,
-                                deviceContext.lowFreqMotor, deviceContext.highFreqMotor);
-                    }
-                }
-                // On Shield devices, we can use their special API to rumble Shield controllers
-                else if (sceManager.rumble(deviceContext.inputDevice, deviceContext.lowFreqMotor, deviceContext.highFreqMotor)) {
-                    vibrated = true;
-                }
-                // If all else fails, we have to try the old Vibrator API
-                else if (deviceContext.vibrator != null) {
-                    vibrated = true;
-                    rumbleSingleVibrator(deviceContext.vibrator, deviceContext.lowFreqMotor, deviceContext.highFreqMotor);
-                }
-            }
-        }
-
-        for (int i = 0; i < usbDeviceContexts.size(); i++) {
-            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
-
-            if (deviceContext.controllerNumber == controllerNumber) {
-                foundMatchingDevice = vibrated = true;
-                deviceContext.device.rumble(lowFreqMotor, highFreqMotor);
-            }
-        }
-
-        // We may decide to rumble the device for player 1
-        if (controllerNumber == 0) {
-            // If we didn't find a matching device, it must be the on-screen
-            // controls that triggered the rumble. Vibrate the device if
-            // the user has requested that behavior.
-            if (!foundMatchingDevice && prefConfig.onscreenController && !prefConfig.onlyL3R3 && prefConfig.vibrateOsc) {
-                rumbleSingleVibrator(deviceVibrator, lowFreqMotor, highFreqMotor);
-            }
-            else if (foundMatchingDevice && !vibrated && prefConfig.vibrateFallbackToDevice) {
-                // We found a device to vibrate but it didn't have rumble support. The user
-                // has requested us to vibrate the device in this case.
-
-                // We cast the unsigned short value to a signed int before multiplying by
-                // the preferred strength. The resulting value is capped at 65534 before
-                // we cast it back to a short so it doesn't go above 100%.
-                short lowFreqMotorAdjusted = (short)(Math.min((((lowFreqMotor & 0xffff)
-                        * prefConfig.vibrateFallbackToDeviceStrength) / 100), Short.MAX_VALUE*2));
-                short highFreqMotorAdjusted = (short)(Math.min((((highFreqMotor & 0xffff)
-                        * prefConfig.vibrateFallbackToDeviceStrength) / 100), Short.MAX_VALUE*2));
-
-                rumbleSingleVibrator(deviceVibrator, lowFreqMotorAdjusted, highFreqMotorAdjusted);
-            }
-        }
     }
+
+    // 最后的备选方案 - PWM模拟
+    long pwmPeriod = 20;
+    long onTime = (long)((simulatedAmplitude / 255.0) * pwmPeriod);
+    long offTime = pwmPeriod - onTime;
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        VibrationAttributes vibrationAttributes = new VibrationAttributes.Builder()
+                .setUsage(VibrationAttributes.USAGE_MEDIA)
+                .build();
+        vibrator.vibrate(VibrationEffect.createWaveform(new long[]{0, onTime, offTime}, 0), vibrationAttributes);
+    }
+    else {
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .build();
+        vibrator.vibrate(new long[]{0, onTime, offTime}, 0, audioAttributes);
+    }
+}
 
     public void handleRumbleTriggers(short controllerNumber, short leftTrigger, short rightTrigger) {
         if (stopped) {
@@ -2227,6 +2169,193 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
     }
+
+    /**
+ * 创建高频点按触觉反馈 - 将长震动替换为多次短促有力的点按
+ */
+@TargetApi(Build.VERSION_CODES.O)
+private void createTapticFeedback(Vibrator vibrator, int simulatedAmplitude, int maxMotorValue) {
+    // 调整振幅增益以增强"力量感"
+    float amplitudeGain = prefConfig.vibrationIntensityGain != 0 ? prefConfig.vibrationIntensityGain : 1.3f;
+    int adjustedAmplitude = Math.min(255, (int)(simulatedAmplitude * amplitudeGain));
+    
+    // 确定震动强度级别
+    VibrationEffect effect;
+    
+    // 高强度震动 - 更强的点击感
+    if (maxMotorValue > 150) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && prefConfig.useSystemPresetEffects) {
+            // 使用系统预设效果 - 强烈点击感
+            effect = VibrationEffect.createPredefined(VibrationEffect.EFFECT_HEAVY_CLICK);
+        } else {
+            // 创建自定义的强力点按效果 - 多次短促有力的点按
+            long[] timings = {0, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10}; // 总共5次点按
+            int[] amplitudes = {0, adjustedAmplitude, 0, adjustedAmplitude, 0, adjustedAmplitude, 0, adjustedAmplitude, 0, adjustedAmplitude, 0};
+            effect = VibrationEffect.createWaveform(timings, amplitudes, -1); // -1表示不重复
+        }
+    }
+    // 中等强度震动
+    else if (maxMotorValue > 80) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && prefConfig.useSystemPresetEffects) {
+            // 使用系统预设效果 - 中等点击感
+            effect = VibrationEffect.createPredefined(VibrationEffect.EFFECT_CLICK);
+        } else {
+            // 创建自定义的中等强度点按效果
+            long[] timings = {0, 8, 15, 8, 15, 8}; // 总共3次点按
+            int[] amplitudes = {0, adjustedAmplitude, 0, adjustedAmplitude, 0, adjustedAmplitude};
+            effect = VibrationEffect.createWaveform(timings, amplitudes, -1);
+        }
+    }
+    // 低强度震动
+    else {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && prefConfig.useSystemPresetEffects) {
+            // 使用系统预设效果 - 轻微点击感
+            effect = VibrationEffect.createPredefined(VibrationEffect.EFFECT_TICK);
+        } else {
+            // 创建自定义的轻微点按效果
+            long[] timings = {0, 5, 10, 5}; // 总共2次点按
+            int[] amplitudes = {0, adjustedAmplitude, 0, adjustedAmplitude};
+            effect = VibrationEffect.createWaveform(timings, amplitudes, -1);
+        }
+    }
+    
+    // 应用震动效果
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        VibrationAttributes attributes = new VibrationAttributes.Builder()
+                .setUsage(VibrationAttributes.USAGE_GAME)
+                .build();
+        vibrator.vibrate(effect, attributes);
+    } else {
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .build();
+        vibrator.vibrate(effect, audioAttributes);
+    }
+}
+
+/**
+ * 创建增强型震动效果 - 特别设计的震动模式，增强力量感
+ */
+@TargetApi(Build.VERSION_CODES.O)
+private void createEnhancedVibration(Vibrator vibrator, int simulatedAmplitude, int maxMotorValue) {
+    // 调整振幅增益
+    float amplitudeGain = prefConfig.vibrationIntensityGain != 0 ? prefConfig.vibrationIntensityGain : 1.2f;
+    int adjustedAmplitude = Math.min(255, (int)(simulatedAmplitude * amplitudeGain));
+    
+    // 确定震动效果
+    VibrationEffect effect;
+    
+    // 根据振动强度级别选择不同模式
+    if (maxMotorValue > 200) {
+        // 强烈冲击波模式 - 适合爆炸、撞击等
+        // 从强到弱，模拟爆炸后的震荡
+        int[] amplitudes = new int[12];
+        amplitudes[0] = 0;
+        amplitudes[1] = adjustedAmplitude;
+        for (int i = 2; i < amplitudes.length; i++) {
+            amplitudes[i] = (int)(amplitudes[i-1] * 0.85f); // 递减的振幅
+        }
+        
+        long[] timings = {0, 40, 30, 25, 25, 20, 20, 15, 15, 10, 10, 5};
+        effect = VibrationEffect.createWaveform(timings, amplitudes, -1);
+    }
+    else if (maxMotorValue > 150) {
+        // 强力脉冲模式 - 适合强烈但持续的动作
+        long[] timings = {0, 20, 10, 15, 10, 10, 10, 10};
+        int[] amplitudes = {
+            0, 
+            adjustedAmplitude, 
+            adjustedAmplitude/2, 
+            adjustedAmplitude*3/4, 
+            adjustedAmplitude/3, 
+            adjustedAmplitude/2, 
+            adjustedAmplitude/4, 
+            adjustedAmplitude/8
+        };
+        effect = VibrationEffect.createWaveform(timings, amplitudes, -1);
+    }
+    else if (maxMotorValue > 100) {
+        // 双重冲击模式 - 适合中等强度的动作
+        long[] timings = {0, 15, 10, 20};
+        int[] amplitudes = {
+            0, 
+            adjustedAmplitude, 
+            adjustedAmplitude/3, 
+            adjustedAmplitude*2/3
+        };
+        effect = VibrationEffect.createWaveform(timings, amplitudes, -1);
+    }
+    else {
+        // 轻微振动模式 - 适合低强度动作
+        long[] timings = {0, 10, 5, 5};
+        int[] amplitudes = {
+            0, 
+            adjustedAmplitude, 
+            0, 
+            adjustedAmplitude/2
+        };
+        effect = VibrationEffect.createWaveform(timings, amplitudes, -1);
+    }
+    
+    // 应用震动效果
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        VibrationAttributes attributes = new VibrationAttributes.Builder()
+                .setUsage(VibrationAttributes.USAGE_GAME)
+                .build();
+        vibrator.vibrate(effect, attributes);
+    } else {
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .build();
+        vibrator.vibrate(effect, audioAttributes);
+    }
+}
+
+/**
+ * 创建默认增强型长震动 - 改进的长震动，比转子马达感觉更好
+ */
+@TargetApi(Build.VERSION_CODES.O)
+private void createDefaultEnhancedVibration(Vibrator vibrator, int simulatedAmplitude) {
+    // 调整振幅
+    float amplitudeGain = prefConfig.vibrationIntensityGain != 0 ? prefConfig.vibrationIntensityGain : 1.1f;
+    int adjustedAmplitude = Math.min(255, (int)(simulatedAmplitude * amplitudeGain));
+    
+    // 创建随时间波动的振幅模式，而不是持续的单一强度
+    int steps = 10;
+    long[] timings = new long[steps * 2 + 1];
+    int[] amplitudes = new int[steps * 2 + 1];
+    
+    timings[0] = 0;
+    amplitudes[0] = 0;
+    
+    for (int i = 0; i < steps; i++) {
+        // 振幅在75%-100%之间波动
+        float factor = 0.75f + (0.25f * (float)Math.sin(i * Math.PI / 5));
+        amplitudes[i*2 + 1] = (int)(adjustedAmplitude * factor);
+        timings[i*2 + 1] = 50; // 高振幅持续50ms
+        
+        // 振幅在40%-75%之间波动
+        float factorLow = 0.4f + (0.35f * (float)Math.sin((i+0.5) * Math.PI / 5));
+        amplitudes[i*2 + 2] = (int)(adjustedAmplitude * factorLow);
+        timings[i*2 + 2] = 30; // 低振幅持续30ms
+    }
+    
+    // 创建振动效果
+    VibrationEffect effect = VibrationEffect.createWaveform(timings, amplitudes, 0); // 0表示重复
+    
+    // 应用震动效果
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        VibrationAttributes attributes = new VibrationAttributes.Builder()
+                .setUsage(VibrationAttributes.USAGE_GAME)
+                .build();
+        vibrator.vibrate(effect, attributes);
+    } else {
+        AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_GAME)
+                .build();
+        vibrator.vibrate(effect, audioAttributes);
+    }
+}
 
     private SensorEventListener createSensorListener(final short controllerNumber, final byte motionType, final boolean needsDeviceOrientationCorrection) {
         return new SensorEventListener() {
